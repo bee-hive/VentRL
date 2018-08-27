@@ -29,7 +29,6 @@ def getParamLists():
     return vitals_list, sedatives_list, sbt_list, misc_list
 
 
-
 def generateTables(save=False):
     
     vitals_list, sedatives_list, sbt_list, misc_list = getParamLists()
@@ -49,14 +48,13 @@ def generateTables(save=False):
     misc_table = mc.charts(cohort_hadms, misc_list)
     
     if save:
-        pickle.dump((adms_table, vent_table, seds_table, sbt_table, misc_table), open('../pickles/tables.pkl', 'wb'))
+        pickle.dump((adms_table, vent_table, seds_table, sbt_table, misc_table), open('../processed_data/tables.pkl', 'wb'))
     return adms_table, vent_table, seds_table, sbt_table, misc_table
  
-
     
 def loadTables():
     
-    adms_table, vent_table, seds_table, sbt_table, misc_table = pickle.load(open('../pickles/tables.pkl', 'rb'))
+    adms_table, vent_table, seds_table, sbt_table, misc_table = pickle.load(open('../processed_data/tables.pkl', 'rb'))
     return adms_table, vent_table, seds_table, sbt_table, misc_table
 
 ####################################################################################

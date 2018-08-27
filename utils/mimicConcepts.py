@@ -1,11 +1,16 @@
-import psycopg2
-import pickle
-import pandas as pd
+####################################################################
+
+### Code: Niranjani Prasad - Princeton University (2018)
 
 ### Concept queries (eg. Elixhauser, OASIS, etc) taken from: 
 ### https://github.com/MIT-LCP/mimic-code/tree/master/concepts
 
-### Create a database connection (changing sql database credentials as appropriate)
+####################################################################
+
+import psycopg2
+import pandas as pd
+
+# Create a database connection (**changing sql database credentials as appropriate**)
 sqluser = 'bee_mimic_admin'
 dbname = 'bee_mimic'
 schema_name = 'mimiciii'
@@ -14,15 +19,15 @@ con = psycopg2.connect(dbname=dbname, user=sqluser, password=sqlpwd)
 cur = con.cursor()
 cur.execute('SET search_path to ' + schema_name)
 
-# Query function
 def q(query):
+    # Query function
     con = psycopg2.connect(dbname=dbname, user=sqluser, password=sqlpwd)
     cur = con.cursor()
     cur.execute('SET search_path to ' + schema_name)
     return pd.read_sql_query(query,con)
 
 def admissions():
-    
+    # Get demographic info from ADMISSIONS table
     query = """
 SELECT DISTINCT on (ie.icustay_id)
     ad.subject_id as subject
@@ -72,6 +77,7 @@ WHERE ad.has_chartevents_data = 1
     return q(query).drop_duplicates()
 
 def comorbidities():
+    # Get ICD9 codes, corresponding descriptions for admission diagnoses from DIAGNOSES_ICD table
     
     query = """
 SELECT  ad.subject_id as subject
@@ -92,6 +98,7 @@ ON di.icd9_code = did.icd9_code
     return q(query).drop_duplicates()
 
 def procedures():
+    # Get ICD9 codes, corresponding descriptions for admission procedures from PROCEDURES_ICD table 
     
     query = """
 SELECT  ad.subject_id as subject
@@ -111,21 +118,12 @@ ON pi.icd9_code = pid.icd9_code
     
     return q(query).drop_duplicates()
 
-def caregivers():
-    
-    query = """
-select distinct ce.icustay_id, ce.charttime, ce.cgid, cg.label
-from mimiciii.chartevents ce
-inner join caregivers cg
-on ce.cgid = cg.cgid
-where value is not null 
-order by icustay_id, cgid
-"""
-    
-    return q(query)
-
 def inputs(hadms, drugs):
+    # Get drugs administered for a given set of admissions, drugs from INPUTEVENTS_MV    
+    # Considers only data from the Metavision system (patients from 2008 onwards) 
+
     # Takes as input a list of hadms, list of drugs names to be extracted
+
     l = ','.join('\'{0}\''.format(h) for h in hadms)
     dl = ','.join('\'{0}\''.format(d) for d in drugs)
     
@@ -164,9 +162,54 @@ ORDER BY ad.subject_id, mv.starttime
 
     return q(query).drop_duplicates()
 
+def inputs_cv(hadms, drugs):
+    # Get drugs administered for a given set of admissions, drugs from INPUTEVENTS_CV  - not used  
+    # Considers only data from the CareVue system (patients from 2001-08)
+
+    # Takes as input a list of hadms, list of drugs names to be extracted
+
+    l = ','.join('\'{0}\''.format(h) for h in hadms)
+    dl = ','.join('\'{0}\''.format(d) for d in drugs)
+    
+    query = """
+SELECT  ad.subject_id as subject
+  , ad.hadm_id as hadm
+  , ie.icustay_id as icustay
+  , ad.diagnosis
+  , cv.itemid as item
+  , it.label as label
+  , cv.orderid as ordercat
+  , cv.charttime as input_start
+  , cv.charttime as input_end
+  , cv.amount as amount
+  , cv.amountuom as amountuom
+  , cv.rate as rate
+  , cv.rateuom as rateuom
+  , cv.patientweight as ptweight
+  , cv.originalamount as totalamount
+  , cv.originalamountuom as totalamountuom
+FROM admissions ad
+INNER JOIN icustays ie
+ON ad.hadm_id = ie.hadm_id
+INNER JOIN diagnoses_icd di
+ON ad.hadm_id = di.hadm_id
+INNER JOIN d_icd_diagnoses did
+ON di.icd9_code = did.icd9_code
+INNER JOIN inputevents_cv cv 
+ON ad.hadm_id = mv.hadm_id
+INNER JOIN d_items it
+ON mv.itemid = it.itemid
+WHERE ad.hadm_id in (""" + l + """)
+AND it.label in (""" + dl + """)
+ORDER BY ad.subject_id, mv.starttime
+"""
+
+    return q(query).drop_duplicates()
 
 def charts(hadms, vits):
+    # Gets recorded vitals measurements from CHARTEVENTS table
     # Takes as input a list of hadms, list of vitals to be extracted
+    
     l = ','.join('\'{0}\''.format(h) for h in hadms)
     cl = ','.join('\'{0}\''.format(d) for d in vits)
     
@@ -192,7 +235,9 @@ ORDER BY ad.subject_id, ch.charttime
     return q(query).drop_duplicates()
 
 def labs(hadms, labs):
-    # Takes as input a list of hadms, list of labs to be extracted    
+    # Gets recorded lab measurements from LABEVENTS table
+    # Takes as input a list of hadms, list of labs to be extracted
+    
     l = ','.join('\'{0}\''.format(h) for h in hadms)
     ll = ','.join('\'{0}\''.format(d) for d in labs)
     
@@ -219,6 +264,7 @@ ORDER BY ad.subject_id, lb.charttime
     return q(query).drop_duplicates()
 
 def notes():
+    # Gets admission notes from NOTEEVENTS table
     
     query = """
 SELECT ad.subject_id as subject
@@ -241,7 +287,23 @@ ORDER BY ad.subject_id
 
     return q(query).drop_duplicates()
 
+def caregivers():
+    # Get caregiver ids for admissions from CAREGIVERS table  
+    
+    query = """
+select ce.icustay_id, ce.charttime, ce.cgid, cg.label
+from mimiciii.chartevents ce
+inner join caregivers cg
+on ce.cgid = cg.cgid
+where value is not null 
+order by icustay_id, cgid
+"""
+    
+    return q(query)
+
 def ventilation():
+    # Gets admissions with mechanical ventilation (by procedure ID),
+    # with start and end times.
     
     vent_id = 225792
     query = """
@@ -259,8 +321,13 @@ ORDER BY pr.icustay_id, pr.starttime
     
     return q(query).drop_duplicates().dropna()
 
+####################################################################
+####################### CLINICAL CONCEPTS ##########################
+####################################################################
 
 def elixhauser():
+    # Comorbidity score
+    
     query =  """
 
 -- This code uses the latest version of Elixhauser provided by AHRQ
@@ -1364,6 +1431,8 @@ order by adm.hadm_id;
     return elix 
 
 def oasis():
+    # Severity of illness score        
+    
     query = """
 -- ITEMIDs used:
 
