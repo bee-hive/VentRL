@@ -17,12 +17,12 @@ The code assumes access to the MIMIC-III database: https://mimic.physionet.org/.
 - matplotlib
 - seaborn
 
-## Files
+## Directory structure
 
-### Data preparation
+### Data preparation:
 
-### RL sample extraction
+### RL sample extraction:
 
-### Fitted q-iteration
+### Fitted q-iteration:
 
-### Evaluation
+### Evaluation:
