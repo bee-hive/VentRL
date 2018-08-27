@@ -1,5 +1,5 @@
 # VentRL
-An RL approach to weaning of mechanical ventilation in ICU - based on [this](https://arxiv.org/abs/1704.06300)
+This repository comprises work for an RL approach to weaning of mechanical ventilation in ICU, based on [this paper](https://arxiv.org/abs/1704.06300).
 
 ## Data
 This project uses the MIMIC-III database: https://mimic.physionet.org/
