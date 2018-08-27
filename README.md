@@ -6,6 +6,7 @@ The code assumes access to the MIMIC-III database: https://mimic.physionet.org/.
 
 ## Dependencies
 
+- python 2.7
 - numpy
 - pandas
 - os
