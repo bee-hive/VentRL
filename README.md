@@ -10,6 +10,7 @@ The code assumes access to the MIMIC-III database: https://mimic.physionet.org/.
 - numpy
 - pandas
 - os
+- pickle
 - psycopg2
 - scikit-learn
 - scipy
@@ -17,3 +18,11 @@ The code assumes access to the MIMIC-III database: https://mimic.physionet.org/.
 - seaborn
 
 ## Files
+
+### Data preparation
+
+### RL sample extraction
+
+### Fitted q-iteration
+
+### Evaluation
