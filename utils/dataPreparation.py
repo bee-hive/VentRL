@@ -1,15 +1,15 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pandas import *
-import os, sys, pickle, json, time, math
 import seaborn as sns
-
+import datetime as dt
+import os, sys, pickle, json, time, math, re
+from joblib import Parallel, delayed
 import mimicConcepts as mc
 
-####################################################################################
-########################### EXTRACT COHORT FROM DATABASE ###########################
-####################################################################################
+############################################################################################################## 
+###                                 Extract cohort from database                                           ###
+##############################################################################################################
 
 def getParamLists():
     
@@ -29,17 +29,18 @@ def getParamLists():
     return vitals_list, sedatives_list, sbt_list, misc_list
 
 
-def generateTables(save=False):
+def generateTables(save=False, savepath='../processed_data/allTables.pkl'):
     
+    # Define covariates of interest
     vitals_list, sedatives_list, sbt_list, misc_list = getParamLists()
     
+    # Extract tables from database
     vent_table = mc.ventilation()
     adms_table = mc.admissions()
     adms_table = adms_table[adms_table.hadm.isin(vent_table.hadm.unique()) & (adms_table.h_exp==0)]
     cohort_hadms = adms_table.hadm.unique()
     cohort_stays = adms_table.icustay.unique()
-    
-    print 'Unique icu stays:', cohort_stays, 'Unique hadms:', cohort_hadms 
+    print '# Unique icu stays:', len(cohort_stays), '| # Unique hadms:', len(cohort_hadms)
     
     vent_table = vent_table[vent_table.hadm.isin(cohort_hadms)]
     vitals_table = mc.charts(cohort_hadms, vitals_list)
@@ -47,26 +48,91 @@ def generateTables(save=False):
     sbt_table = mc.charts(cohort_hadms, sbt_list)
     misc_table = mc.charts(cohort_hadms, misc_list)
     
+    # Quality control on measurements recorded in charts
+    vstats_qc, vitals_qc = qualityControl(vitals_table, ref_cov_list=vitals_list, fig_dir='../processed_data/qc/', plot=False, 
+                            savepath='../processed_data/qc_vitals.pkl')
+    
+    mstats_qc, misc_qc = qualityControl(misc_table, ref_cov_list=misc_list, fig_dir='../processed_data/qc/', plot=False, 
+                            savepath='../processed_data/qc_misc.pkl')
+    
+    stats = pd.concat((vstats_qc, mstats_qc)).reset_index(drop=True)
+    measures_table = pd.concat((vitals_qc, misc_qc)).reset_index(drop=True)
+    
     if save:
-        pickle.dump((adms_table, vent_table, seds_table, sbt_table, misc_table), open('../processed_data/tables.pkl', 'wb'))
-    return adms_table, vent_table, seds_table, sbt_table, misc_table
+        pickle.dump((adms_table, vent_table, measures_table, seds_table, sbt_table), open(savepath, 'wb'))
+    return adms_table, vent_table, measures_table, seds_table, sbt_table
  
     
-def loadTables():
+def loadTables(filepath='../processed_data/allTables.pkl'):
     
-    adms_table, vent_table, seds_table, sbt_table, misc_table = pickle.load(open('../processed_data/tables.pkl', 'rb'))
-    return adms_table, vent_table, seds_table, sbt_table, misc_table
-
-####################################################################################
-######################## QUALITY CONTROL + GP IMPUTATION ###########################
-####################################################################################
+    adms_table, vent_table, measures_table, seds_table, sbt_table = pickle.load(open(filepath, 'rb'))
+    
+    return adms_table, vent_table, measures_table, seds_table, sbt_table
 
 
-####################################################################################
-########################### BUILD ADMISSION TIMEFRAMES #############################
-####################################################################################
+def qualityControl(raw_df, time_col='charttime', name_col='label', val_col='value', ref_cov_list=None, 
+                 fig_dir='.', fig_format='pdf', plot=False, savepath=None):
+    # Filter for NaNs, any vitals measurements more than 3 standard deviations from the population mean.
+    
+    if ref_cov_list is None:
+        ref_cov_list = raw_df[name_col].unique()
+    cov_stat_df = pd.DataFrame(columns=['covariate', 'raw_mean', 'raw_std', 'raw_min', 'raw_max', 
+                                        'qc_mean', 'qc_std', 'qc_min', 'qc_max'])
+    sub_data_df = pd.DataFrame(columns=raw_df.columns)
+    
+    for cov_name, cov_df in raw_df.groupby(name_col):
+        print(cov_name)
+        
+        if(cov_name in ref_cov_list):
+            raw_cov_val = cov_df[val_col].values
+            cov_mean = np.nanmean(raw_cov_val)
+            cov_std = np.nanstd(raw_cov_val)
+            
+            qc_cov_df = cov_df[~np.isnan(cov_df[val_col])]
+            qc_cov_df = cov_df[cov_df[val_col] > 0]
+            qc_cov_df = cov_df[cov_df[val_col] <= 999.0]
+            qc_cov_df = qc_cov_df[cov_df[val_col] >= (cov_mean-3*cov_std)]
+            qc_cov_df = qc_cov_df[qc_cov_df[val_col] <= (cov_mean+3*cov_std)]
+            qc_cov_val = qc_cov_df[val_col].values
+            cov_stat_df = cov_stat_df.append({'covariate': cov_name,
+                                              'raw_mean': np.nanmean(raw_cov_val), 
+                                              'raw_std': np.nanstd(raw_cov_val), 
+                                              'raw_min': np.nanmin(raw_cov_val), 
+                                              'raw_max': np.nanmax(raw_cov_val),
+                                              'qc_mean': np.nanmean(qc_cov_val), 
+                                              'qc_std': np.nanstd(qc_cov_val), 
+                                              'qc_min': np.nanmin(qc_cov_val), 
+                                              'qc_max': np.nanmax(qc_cov_val)
+                                             }, ignore_index=True)
+            if plot:
+                plt.figure(figsize=(12, 6))
+                plt.subplot(1, 2, 1)
+                sns.distplot(raw_cov_val[~np.isnan(raw_cov_val)])
+                plt.title(cov_name + ': before qc')
 
-def buildTimeFrame(start, end, delta):
+                plt.subplot(1, 2, 2)
+                sns.distplot(qc_cov_val)
+                plt.title(cov_name + ': after qc')
+                plt.savefig(os.path.join(fig_dir, 'qc_hist_{}.{}'.format(cov_name, fig_format)))
+            
+            sub_data_df = sub_data_df.append(qc_cov_df)
+                
+            if (savepath!=None):
+                 pickle.dump((cov_stat_df, sub_data_df), open(savepath, 'wb'))
+    return cov_stat_df, sub_data_df
+
+############################################################################################################## 
+###                                   Build admission timeframes                                           ###
+##############################################################################################################
+
+def buildTimeFrame(table_h, delta):
+    # Get admit and discharge time in numeric form, round down/up respectively to the nearest hour:
+    
+    start =  pd.to_datetime(table_h.admit_time.unique().item())
+    start -= dt.timedelta(minutes=start.minute, seconds=start.second, microseconds=start.microsecond)
+    end = pd.to_datetime(table_h.discharge_time.unique().item())
+    end -= dt.timedelta(minutes=end.minute, seconds=end.second, microseconds=end.microsecond)
+    end += dt.timedelta(hours=1)
     
     times = []
     curr = start
@@ -77,144 +143,129 @@ def buildTimeFrame(start, end, delta):
     return timeFrame
 
 
+def getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df):    
+    # Generate admission dataframe
 
-def getChartFrame(h, ventTable, sedTable, vitTable, sbtTable):  
-    
     vits_list, seds_list, sbt_list, misc_list = getParamLists()
-
+    adms_table = adms_df[adms_df.hadm == h]
     
-    # Get admit and discharge time in numeric form, round down/up respectively to the nearest hour:
-    admitTime =  pd.to_datetime(ventTable[ventTable.hadm == h].admit_time.unique().item())
-    admitTime -= dt.timedelta(minutes=admitTime.minute, seconds=admitTime.second, microseconds=admitTime.microsecond)
+    chartFrame =  buildTimeFrame(adms_table, dt.timedelta(hours=1))
+    chartFrame['hadm'] = h
+    chartFrame['firstICU'] = adms_table.icustay.head(1).item()
+    chartFrame['subject'] = adms_table.subject.head(1).item()
+    chartFrame['Admittype'] = int(adms_table.head(1).admittype.item()=='EMERGENCY') # 0 - elective/urgent; 1 - emergency
+    chartFrame['Admdays'] = adms_table.adm_los.head(1).item()
+    chartFrame['Ethnicity'] = int('WHITE' not in adms_table.head(1).ethnicity.item()) # 0 - white; 1 - non-white 
+    chartFrame['Gender'] = int(adms_table.head(1).gender.item()=='F') # 0 - male, 1 - female
+    chartFrame['Age'] = adms_table.head(1).age.item()
     
-    dischTime = pd.to_datetime(ventTable[ventTable.hadm == h].discharge_time.unique().item())
-    dischTime -= dt.timedelta(minutes=dischTime.minute, seconds=dischTime.second, microseconds=dischTime.microsecond)
-    dischTime += dt.timedelta(minutes = 10)
+    measures_table = measures_df[measures_df.hadm == h]  
+                
+    for v in (misc_list + vits_list):
+        chartFrame[v] = np.nan
+        vitals_v = measures_table[(measures_table.label == v)].sort_values(by='charttime')
+        vitals_v.set_index('charttime',inplace=True,drop=False)
+        vitals_v = vitals_v.resample('1h').mean().fillna(method="ffill")    
+        vitals_v['timestamp'] = vitals_v.index
+        for t in chartFrame.timestamp:
+            if vitals_v[vitals_v.timestamp == t].empty == False:
+                chartFrame.loc[chartFrame.timestamp == t,v] = vitals_v[vitals_v.timestamp == t].value.item()  
     
-    chartFrame =  buildTimeFrame(admitTime, dischTime, dt.timedelta(minutes=10))
+    seds_table = seds_df[seds_df.hadm == h]
+
+    sedValue = {}
+    for s in seds_list:
+        chartFrame[s] = 0
+        for t in chartFrame.timestamp: sedValue[t] = 0
+        for i,row in seds_table[(seds_table.label == s)].iterrows():
+            if not row.empty:
+                sedStart = (row.input_start).to_pydatetime()
+                sedEnd = (row.input_end).to_pydatetime()
+                sedDur = (sedEnd - sedStart).seconds/3600.0
+                nextTS = t.to_pydatetime() + dt.timedelta(hours = 1)
+
+                for t in chartFrame.timestamp:
+                    if bool(re.match('05|06', row.ordercat)): 
+                        if ((sedStart >= t.to_pydatetime()) and (sedEnd <= t.to_pydatetime() + dt.timedelta(hours = 1))):
+                                sedValue[t] += float(row.amount)
+
+                    elif bool(re.match('01|02', row.ordercat)):
+                        if (t.to_pydatetime() <= sedStart) and (t.to_pydatetime() <= sedEnd): 
+                            if (t.to_pydatetime() + dt.timedelta(hours = 1) >= sedStart):
+                                if (sedEnd <= nextTS):
+                                    sedValue[t] += float(row.amount)/sedDur
+                                else: 
+                                    sedValue[t] += float(row.amount)/sedDur*((nextTS - sedStart).seconds/3600.0)                                                                         
+                        elif (t.to_pydatetime() >= sedStart) and (t.to_pydatetime() <= sedEnd):
+                            if (t.to_pydatetime() + dt.timedelta(hours = 1) > sedEnd):
+                                sedValue[t] += float(row.amount)/sedDur*((sedEnd - t.to_pydatetime()).seconds/3600.0) 
+                            else: 
+                                sedValue[t] += float(row.amount)/sedDur*((nextTS - t.to_pydatetime()).seconds/3600.0) 
+
+                    chartFrame.loc[chartFrame.timestamp == t,s] = round(sedValue[t], 2)
+                            
+    vent_table = vent_df[(vent_df.hadm == h)]
     
-    if (len(chartFrame)>=144 and len(chartFrame)<=2160):   
-        print "1"
-        # Load in hadm, subj id, admit type and demographics: ethnicity, gender, age, [height, weight <-- TO DO]
-        chartFrame['hadm'] = h
-        chartFrame['subject'] = ventTable[ventTable.hadm == h].subject.head(1).item()
-        chartFrame['admittype'] = ventTable[ventTable.hadm == h].admittype.head(1).item()
-        chartFrame['adm_days'] = (dischTime - admitTime).days
-        chartFrame['Ethnicity'] = ventTable[ventTable.hadm == h].subj_ethnicity.head(1).item()
-        chartFrame['Gender'] = (ventTable[ventTable.hadm == h].gender.head(1).item()) # 0 for Male, 1 for Female
-        chartFrame['Age'] = (ventTable[ventTable.hadm == h].admit_time.head(1).dt.year - 
-                           ventTable[ventTable.hadm == h].dateofbirth.head(1).dt.year).item() % 210 # for censored >90s
-        chartFrame['Weight'] = vitTable[(vitTable.hadm == h) & (vitTable.label.str.contains('Weight'))].head(1).value.item()
-        try:
-            chartFrame['Height'] = vitTable[(vitTable.hadm == h) & (vitTable.label == 'Height (cm)')].head(1).value.item()
-        except ValueError:
-            chartFrame['Height'] = 'NaN'
-            pass 
-        print "2"
-        chartFrame['Vented'] = 0
-        # Add 'vented' indicator column
-        for i,row in ventTable[ventTable.hadm == h].iterrows():
-            ventStart = pd.to_datetime(row.vent_starttime)
-            ventStart -= dt.timedelta(minutes=ventStart.minute, seconds=ventStart.second, microseconds=ventStart.microsecond)
-            ventStart += dt.timedelta(minutes = 10)
-            ventEnd = pd.to_datetime(row.vent_endtime)
-            ventEnd -= dt.timedelta(minutes=ventEnd.minute, seconds=ventEnd.second, microseconds=ventEnd.microsecond)
-            for t in chartFrame.timestamp:
-                if (pd.to_datetime(t) >= ventStart) and (pd.to_datetime(t) <= ventEnd): 
-                    chartFrame.loc[chartFrame.timestamp == t,'Vented'] = 1
-        print "3"
-        # Load in SBT info:
-        chartFrame['SBT'] = np.nan
-        for v in sbtList:
-            sbt_t = sbtTable[(sbtTable.hadm == h) & (sbtTable.label == v)].sort_values(by='charttime')
-            sbt_t.set_index('charttime',inplace=True,drop=False)
-            sbt_t = sbt_t.resample('10min').mean()
-            sbt_t = sbt_t[sbt_t['subject'].notnull()]
-            sbt_t['timestamp'] = sbt_t.index
-            for t in chartFrame.timestamp:
-                if sbt_t[sbt_t.timestamp == t].empty == False:
-                    chartFrame.loc[chartFrame.timestamp == t,'SBT'] = v # overwrites if multiple things happen
-        print "4"               
-        # Load in resampled and interpolated vitals:
-        prefix="/tigress/BEE/usr/lifangc/workspace/mimic_experiment/vent_exp0002_k7_p0_s0/df/vent_exp0002_k7_p0_s0_df_hadm_"
-        impTable = pd.read_pickle(prefix + str(h) + ".pkl")
-        for v in interpolated:
-            chartFrame[v] = np.nan
-            vitals_v = impTable[(impTable.label == v)].sort_values(by='charttime')
-            vitals_v.set_index('charttime',inplace=True,drop=False)
-            vitals_v = vitals_v.resample('10min').mean().fillna(method="ffill")    
-            vitals_v['timestamp'] = vitals_v.index
-            for t in chartFrame.timestamp:
-                if vitals_v[vitals_v.timestamp == t].empty == False:
-                    chartFrame.loc[chartFrame.timestamp == t,v] = vitals_v[vitals_v.timestamp == t].value.item()
-        print "5"            
-        # Load in resampled and interpolated vitals:
-        for v in resampled:
-            chartFrame[v] = np.nan
-            vitals_v = vitTable[(vitTable.hadm == h) & (vitTable.label == v)].sort_values(by='charttime')
-            vitals_v.set_index('charttime',inplace=True,drop=False)
-            vitals_v = vitals_v.resample('10min').mean().fillna(method="ffill")    
-            vitals_v['timestamp'] = vitals_v.index
-            for t in chartFrame.timestamp:
-                if vitals_v[vitals_v.timestamp == t].empty == False:
-                    chartFrame.loc[chartFrame.timestamp == t,v] = vitals_v[vitals_v.timestamp == t].value.item()
-        print "6"
-        # Load in sedation times, drugs (indicator column for each drug)
-        sedValue = {}
-        for s in sedationList:
-            chartFrame[s] = 0
-            for t in chartFrame.timestamp: sedValue[s,t] = 0
-            for i,row in sedTable[(sedTable.hadm==h) & (sedTable.label==s)].iterrows():
-                if not row.empty:
-                    sedStart = pd.to_datetime(row.input_start)
-                    sedEnd = pd.to_datetime(row.input_end)
-                    sedDur = (sedEnd - sedStart).seconds
-                    for t in chartFrame.timestamp:
-                        if (pd.to_datetime(t) >= sedStart) and (pd.to_datetime(t) <= sedEnd): 
-                            if row.ordercat == 'Continuous Med': 
-                                sedValue[s,t] += float(row.amount)*3600/sedDur
-                            elif row.ordercat == 'Drug Push':
-                                sedValue[s,t] += float(row.amount)
-                            chartFrame.loc[chartFrame.timestamp == t,s] = int(round(sedValue[s,t]))
-        print "7"    
-        tmp = chartFrame[chartFrame['Ventilator Mode'].notnull()].head(4)
-        chartFrame = tmp.append(chartFrame.loc[chartFrame.loc[chartFrame['Ventilator Mode'].notnull()].index 
-                                               + timedelta(hours=4)])
-    else:
-        chartFrame=[0]
-    return chartFrame 
+    chartFrame['Vented'] = 0
+    for i,row in vent_table.iterrows():
+        ventStart = row.vent_starttime.to_pydatetime()
+        ventStart -= dt.timedelta(minutes=ventStart.minute, seconds=ventStart.second, microseconds=ventStart.microsecond)
+        ventStart += dt.timedelta(hours=1)
+        ventEnd = row.vent_endtime.to_pydatetime()
+        ventEnd -= dt.timedelta(minutes=ventEnd.minute, seconds=ventEnd.second, microseconds=ventEnd.microsecond)
+        for t in chartFrame.timestamp:
+            if (t.to_pydatetime() >= ventStart) and (t.to_pydatetime() <= ventEnd): 
+                chartFrame.loc[chartFrame.timestamp == t,'Vented'] = 1
+                
+    sbt_table = sbt_df[(sbt_df.hadm == h)]
 
-
-
-def produceFrames(output, h):
+    chartFrame['SBT'] = 'None'
+    for v in sbt_list:
+        sbt_t = sbt_table[(sbt_table.label == v)].sort_values(by='charttime')
+        sbt_t.set_index('charttime',inplace=True,drop=False)
+        sbt_t = sbt_t.resample('1h').mean()
+        sbt_t = sbt_t[sbt_t['subject'].notnull()]
+        sbt_t['timestamp'] = sbt_t.index
+        for t in chartFrame.timestamp:
+            if sbt_t[sbt_t.timestamp == t].empty == False:
+                chartFrame.loc[chartFrame.timestamp == t,'SBT'] = v # overwrites if multiple things happen
+    
+    tmp = chartFrame[chartFrame['Ventilator Mode'].notnull()].head(4)
+    chartFrame = tmp.append(chartFrame.loc[chartFrame.loc[chartFrame['Ventilator Mode'].notnull()].index +
+                                           dt.timedelta(hours=4)])
+    
+    chartFrame = chartFrame.reset_index(drop=True)
+    chartFrame = chartFrame.fillna(method='ffill').fillna(method='bfill')
+    chartFrame = chartFrame[~np.isnat(chartFrame.timestamp)]   
+            
+    return chartFrame
+    
+def produceFrames(output, h, adms_df, vent_df, measures_df, seds_df, sbt_df):
     try:
-        output[h] = getChartFrame(h, vent_discharged, inputs_discharged, vit_discharged, sbt_discharged,
-                                       vitals_list, seds_list, sbt_list)
+        output[h] = getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df)
     except BaseException:
         output[h] = [0]
     return output[h]
-
-    
-####################################################################################
-########################### BUILD ADMISSION TIMEFRAMES #############################
-####################################################################################    
-    
+  
 def main():
-
-    validIDs = pd.read_pickle("pickles/filteredValidIDs.pkl")
-    outputFrames = {}  
     
-    outputFrames = Parallel(n_jobs=16, verbose=50)(delayed(produceFrames)(outputFrames, h) for h in validIDs)
-
+    filepath='../processed_data/allTables.pkl'
+    adms_df, vent_df, measures_df, seds_df, sbt_df = pickle.load(open(filepath, 'rb'))
+    hadms = (list(set(adms_df.hadm.unique()) & set(vent_df.hadm.unique()) & set(measures_df.hadm.unique()) &
+                  set(seds_df.hadm.unique())))
+    
+    outputFrames = {}
+    outputFrames = Parallel(n_jobs=20, verbose=50)(delayed(produceFrames)(outputFrames, i, adms_df, vent_df, measures_df,
+                                                                          seds_df, sbt_df) for i in hadms)
+    
     filteredOutputFrames = {}
     for i in range(len(outputFrames)):
-        if (len(outputFrames[i])> 1):
+        if (len(outputFrames[i]) > 1):
             hadm = outputFrames[i].hadm.head(1).item()
             filteredOutputFrames[hadm] = outputFrames[i]
-
-    with open("pickles/gpfilteredFrames.pkl",'wb') as f:
-        pickle.dump(filteredOutputFrames,f)
     
+    filename = "../processed_data/processedFrames.pkl" 
+    pickle.dump(filteredOutputFrames, open(filename,'wb'))        
 
 if __name__ == '__main__':
     main()

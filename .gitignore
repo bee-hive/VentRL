@@ -3,3 +3,4 @@ processed_data/tables.pkl
 */*.ipynb_checkpoints
 */*.pyc
 */*.pkl
+*/log*
