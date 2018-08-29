@@ -4,3 +4,4 @@ processed_data/tables.pkl
 */*.pyc
 */*.pkl
 */log*
+processed_data/*

@@ -5,6 +5,7 @@ import seaborn as sns
 import datetime as dt
 import os, sys, pickle, json, time, math, re
 from joblib import Parallel, delayed
+import argparse
 import mimicConcepts as mc
 
 ############################################################################################################## 
@@ -143,11 +144,10 @@ def buildTimeFrame(table_h, delta):
     return timeFrame
 
 
-def getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df):    
+def getChartFrame(h, adms_table, vent_table, measures_table, seds_table, sbt_table):    
     # Generate admission dataframe
 
     vits_list, seds_list, sbt_list, misc_list = getParamLists()
-    adms_table = adms_df[adms_df.hadm == h]
     
     chartFrame =  buildTimeFrame(adms_table, dt.timedelta(hours=1))
     chartFrame['hadm'] = h
@@ -158,9 +158,7 @@ def getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df):
     chartFrame['Ethnicity'] = int('WHITE' not in adms_table.head(1).ethnicity.item()) # 0 - white; 1 - non-white 
     chartFrame['Gender'] = int(adms_table.head(1).gender.item()=='F') # 0 - male, 1 - female
     chartFrame['Age'] = adms_table.head(1).age.item()
-    
-    measures_table = measures_df[measures_df.hadm == h]  
-                
+                    
     for v in (misc_list + vits_list):
         chartFrame[v] = np.nan
         vitals_v = measures_table[(measures_table.label == v)].sort_values(by='charttime')
@@ -171,8 +169,6 @@ def getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df):
             if vitals_v[vitals_v.timestamp == t].empty == False:
                 chartFrame.loc[chartFrame.timestamp == t,v] = vitals_v[vitals_v.timestamp == t].value.item()  
     
-    seds_table = seds_df[seds_df.hadm == h]
-
     sedValue = {}
     for s in seds_list:
         chartFrame[s] = 0
@@ -203,9 +199,7 @@ def getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df):
                                 sedValue[t] += float(row.amount)/sedDur*((nextTS - t.to_pydatetime()).seconds/3600.0) 
 
                     chartFrame.loc[chartFrame.timestamp == t,s] = round(sedValue[t], 2)
-                            
-    vent_table = vent_df[(vent_df.hadm == h)]
-    
+                                
     chartFrame['Vented'] = 0
     for i,row in vent_table.iterrows():
         ventStart = row.vent_starttime.to_pydatetime()
@@ -217,8 +211,6 @@ def getChartFrame(h, adms_df, vent_df, measures_df, seds_df, sbt_df):
             if (t.to_pydatetime() >= ventStart) and (t.to_pydatetime() <= ventEnd): 
                 chartFrame.loc[chartFrame.timestamp == t,'Vented'] = 1
                 
-    sbt_table = sbt_df[(sbt_df.hadm == h)]
-
     chartFrame['SBT'] = 'None'
     for v in sbt_list:
         sbt_t = sbt_table[(sbt_table.label == v)].sort_values(by='charttime')
@@ -247,25 +239,35 @@ def produceFrames(output, h, adms_df, vent_df, measures_df, seds_df, sbt_df):
         output[h] = [0]
     return output[h]
   
-def main():
-    
-    filepath='../processed_data/allTables.pkl'
-    adms_df, vent_df, measures_df, seds_df, sbt_df = pickle.load(open(filepath, 'rb'))
-    hadms = (list(set(adms_df.hadm.unique()) & set(vent_df.hadm.unique()) & set(measures_df.hadm.unique()) &
-                  set(seds_df.hadm.unique())))
+def main(hadms=None):
+
+    tables='../processed_data/allTables.pkl'
+    adms_df, vent_df, measures_df, seds_df, sbt_df = pickle.load(open(tables, 'rb'))
+        
+    if hadms==None:
+        hadms = (list(set(adms_df.hadm.unique()) & set(measures_df.hadm.unique()) & set(seds_df.hadm.unique())))
+        outputname = "../processed_data/processedFrames.pkl" 
+    else:
+        outputname = "../processed_data/h_frames/set-" + str(hadms[0]) +".pkl"  
     
     outputFrames = {}
-    outputFrames = Parallel(n_jobs=20, verbose=50)(delayed(produceFrames)(outputFrames, i, adms_df, vent_df, measures_df,
-                                                                          seds_df, sbt_df) for i in hadms)
-    
+    outputFrames = Parallel(n_jobs=10, verbose=50)(delayed(produceFrames)(outputFrames, h, adms_df[adms_df.hadm == h],
+                                                                          vent_df[vent_df.hadm == h],
+                                                                          measures_df[measures_df.hadm == h],
+                                                                          seds_df[seds_df.hadm == h], 
+                                                                          sbt_df[sbt_df.hadm == h]) for h in hadms)
     filteredOutputFrames = {}
     for i in range(len(outputFrames)):
         if (len(outputFrames[i]) > 1):
             hadm = outputFrames[i].hadm.head(1).item()
             filteredOutputFrames[hadm] = outputFrames[i]
-    
-    filename = "../processed_data/processedFrames.pkl" 
-    pickle.dump(filteredOutputFrames, open(filename,'wb'))        
+            
+    pickle.dump(filteredOutputFrames, open(outputname,'wb'))   
 
 if __name__ == '__main__':
-    main()
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--h', type=str, default=None, help='hadm IDs')
+    args = parser.parse_args()
+    
+    main(hadms=[int(i) for i in open(args.h, 'r').read().split()])

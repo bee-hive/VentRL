@@ -322,7 +322,7 @@ ORDER BY pr.icustay_id, pr.starttime
     return q(query).drop_duplicates().dropna()
 
 ####################################################################
-####################### CLINICAL CONCEPTS ##########################
+###                     CLINICAL CONCEPTS                        ###
 ####################################################################
 
 def elixhauser():
