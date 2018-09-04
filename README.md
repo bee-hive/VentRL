@@ -18,5 +18,4 @@ The code assumes access to the MIMIC-III database: https://mimic.physionet.org/.
 - seaborn
 
 This is research level code, and will continue to be updated.
-
 If you have any questions/comments, please email <np6@princeton.edu>. Thanks!
