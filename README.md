@@ -17,4 +17,4 @@ The code assumes access to the MIMIC-III database: https://mimic.physionet.org/.
 - matplotlib
 - seaborn
 
-This is research level code - if you have any questions/comments, please email [Niranjani Prasad](np6@princeton.edu).
+This is research level code, and will continue to be updated - if you have any questions/comments, please email Niranjani Prasad at <np6@princeton.edu>.
