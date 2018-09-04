@@ -148,7 +148,7 @@ def getChartFrame(h, adms_table, vent_table, measures_table, seds_table, sbt_tab
     # Generate admission dataframe
 
     vits_list, seds_list, sbt_list, misc_list = getParamLists()
-    
+    adms_table = adms_table[adms_table.hadm == h]
     chartFrame =  buildTimeFrame(adms_table, dt.timedelta(hours=1))
     chartFrame['hadm'] = h
     chartFrame['firstICU'] = adms_table.icustay.head(1).item()
@@ -158,7 +158,8 @@ def getChartFrame(h, adms_table, vent_table, measures_table, seds_table, sbt_tab
     chartFrame['Ethnicity'] = int('WHITE' not in adms_table.head(1).ethnicity.item()) # 0 - white; 1 - non-white 
     chartFrame['Gender'] = int(adms_table.head(1).gender.item()=='F') # 0 - male, 1 - female
     chartFrame['Age'] = adms_table.head(1).age.item()
-                    
+    
+    measures_table = measures_table[measures_table.hadm == h]
     for v in (misc_list + vits_list):
         chartFrame[v] = np.nan
         vitals_v = measures_table[(measures_table.label == v)].sort_values(by='charttime')
@@ -167,8 +168,9 @@ def getChartFrame(h, adms_table, vent_table, measures_table, seds_table, sbt_tab
         vitals_v['timestamp'] = vitals_v.index
         for t in chartFrame.timestamp:
             if vitals_v[vitals_v.timestamp == t].empty == False:
-                chartFrame.loc[chartFrame.timestamp == t,v] = vitals_v[vitals_v.timestamp == t].value.item()  
-    
+                chartFrame.loc[chartFrame.timestamp == t,v] = vitals_v[vitals_v.timestamp == t].value.item() 
+                
+    seds_table = seds_table[seds_table.hadm == h]
     sedValue = {}
     for s in seds_list:
         chartFrame[s] = 0
@@ -200,6 +202,7 @@ def getChartFrame(h, adms_table, vent_table, measures_table, seds_table, sbt_tab
 
                     chartFrame.loc[chartFrame.timestamp == t,s] = round(sedValue[t], 2)
                                 
+    vent_table = vent_table[vent_table.hadm == h]
     chartFrame['Vented'] = 0
     for i,row in vent_table.iterrows():
         ventStart = row.vent_starttime.to_pydatetime()
@@ -211,6 +214,7 @@ def getChartFrame(h, adms_table, vent_table, measures_table, seds_table, sbt_tab
             if (t.to_pydatetime() >= ventStart) and (t.to_pydatetime() <= ventEnd): 
                 chartFrame.loc[chartFrame.timestamp == t,'Vented'] = 1
                 
+    sbt_table = sbt_table[sbt_table.hadm == h]
     chartFrame['SBT'] = 'None'
     for v in sbt_list:
         sbt_t = sbt_table[(sbt_table.label == v)].sort_values(by='charttime')

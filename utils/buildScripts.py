@@ -10,7 +10,7 @@ import mimicConcepts as mc
 
 print '-------- Creating hadms lists --------'
 
-allIDs = open('hadms.txt', 'r').read() 
+allIDs = open('../processed_data/hadms.txt', 'r').read() 
 allIDs = [int(i) for i in allIDs.split()]
 print 'Total # IDs:', len(allIDs)
 
@@ -20,7 +20,7 @@ partitionedIDs = [(' '.join('{0}'.format(h) for h in allIDs[i:i+size])) for i in
 print '# Partitions:', numP, 'Size:', size
 
 for i in range(numP):
-    partitions_path='tmp/splithadms'+str(i)+'.txt'
+    partitions_path='../processed_data/splits/splithadms'+str(i)+'.txt'
     open(partitions_path, 'w').writelines(partitionedIDs[i])
 
 print '-------- Creating slurm script --------'
@@ -30,7 +30,7 @@ header = ["#!/bin/bash",
           "#SBATCH --ntasks-per-node=20",
           "#SBATCH -t 4:00:00",
           "#SBATCH --mem=30000",
-          "#SBATCH --output=/tigress/BEE/mimic/usr/np6/vent-public/processed-data/h_frames/tmp/%u_%j.out",
+          "#SBATCH --output=/tigress/BEE/mimic/usr/np6/vent-public/processed_data/h_frames/tmp/%u_%j.out",
           "export OMP_NUM_THREADS=30",
           "export KMP_AFFINITY=granularity=fine,compact,1,0;",
           "export OMP_NESTED=TRUE",
@@ -40,16 +40,16 @@ header = ["#!/bin/bash",
 slurm_path = "/tigress/BEE/mimic/usr/np6/vent-public/utils/slurm.sh"
 open(slurm_path, 'w').writelines('\n'.join(header))
 
-args = ["", "H=$2", ""]
-open('slurm.sh', 'a').writelines('\n'.join(args))
+args = ["", "H=$2", "BASE=`echo '$H' | awk -F\"/\" '{print $NF}' | awk -F\".txt\" '{print $1}'`", ""]
+open(slurm_path, 'a').writelines('\n'.join(args))
 
-command = ["python $WORKDIR/utils/dataPreparation.py --h $H  > $WORKDIR/processed_data/h_frames/log/fe${H}.log", ""]
-open('slurm.sh', 'a').writelines('\n'.join(command))
+command = ["python $WORKDIR/utils/dataPreparation.py --h $H  > $WORKDIR/processed_data/h_frames/log/${BASE}.log", ""]
+open(slurm_path, 'a').writelines('\n'.join(command))
 
 print '-------- Creating submit script --------'
 
 loop_command = ["EXP_NAME=\"frame_extraction\"",
                 "for N in {0..199}; do", 
-                "sbatch --job-name=${EXP_NAME}_${N} "+ slurm_path + " --h tmp/splithadms${N}.txt", 
+                "sbatch --job-name=${EXP_NAME}_${N} "+ slurm_path + " --h ../processed_data/splits/splithadms${N}.txt", 
                 "done", ""]
-open('submit.sh', 'w').writelines('\n'.join(loop_command))
+open( "/tigress/BEE/mimic/usr/np6/vent-public/utils/submit.sh", 'w').writelines('\n'.join(loop_command))
